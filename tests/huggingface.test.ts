@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { extractJson, AiServiceError } from '../server/services/huggingface';
 import {
   getLanguageInstruction,
@@ -88,6 +88,143 @@ Hope this helps!`;
       expect(prompt).toContain('Touch Grass Mission');
       expect(prompt).toContain('SAFETY RULES');
       expect(prompt).toContain('हिंदी लिपि');
+    });
+  });
+
+  describe('Provider Error Classification & Truthful Status', () => {
+    it('classifies HTTP 402 as billing/quota exhaustion error', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 402,
+        json: async () => ({ error: 'You have no remaining credits.' }),
+      }) as any;
+
+      const { callHuggingFaceChat } = await import('../server/services/huggingface');
+      const { config } = await import('../server/config');
+      config.hfToken = 'test_token';
+
+      try {
+        await expect(
+          callHuggingFaceChat({
+            model: 'google/gemma-3-4b-it',
+            messages: [{ role: 'user', content: 'Hi' }],
+          })
+        ).rejects.toThrow(/billing\/quota limit/i);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('classifies HTTP 400 as provider model support error', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: { message: "The requested model 'unknown/model' is not supported by any provider" },
+        }),
+      }) as any;
+
+      const { callHuggingFaceChat } = await import('../server/services/huggingface');
+      const { config } = await import('../server/config');
+      config.hfToken = 'test_token';
+
+      try {
+        await expect(
+          callHuggingFaceChat({
+            model: 'unknown/model',
+            messages: [{ role: 'user', content: 'Hi' }],
+          })
+        ).rejects.toThrow(/provider error/i);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('verifies independent text and vision model separation in config', async () => {
+      const { config } = await import('../server/config');
+      expect(config.hfTextModel).toBeDefined();
+      expect(config.hfVisionModel).toBeDefined();
+      expect(config.hfVisionModel).toContain('Vision');
+    });
+
+    it('falls back automatically if provider rejects response_format with 400', async () => {
+      const originalFetch = globalThis.fetch;
+      let requestCount = 0;
+      let secondRequestBody: any = null;
+
+      globalThis.fetch = vi.fn().mockImplementation(async (_url: string, options: any) => {
+        requestCount++;
+        if (requestCount === 1) {
+          return {
+            ok: false,
+            status: 400,
+            json: async () => ({ error: { message: 'response_format is not supported by provider' } }),
+          } as Response;
+        }
+        secondRequestBody = JSON.parse(options.body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ choices: [{ message: { content: '{"answer":"Fallback success"}' } }] }),
+        } as Response;
+      }) as any;
+
+      const { callHuggingFaceChat } = await import('../server/services/huggingface');
+      const { config } = await import('../server/config');
+      config.hfToken = 'test_token';
+
+      try {
+        const result = await callHuggingFaceChat({
+          model: 'google/gemma-3-4b-it',
+          messages: [{ role: 'user', content: 'Hi' }],
+        });
+        expect(result).toBe('{"answer":"Fallback success"}');
+        expect(requestCount).toBe(2);
+        expect(secondRequestBody.response_format).toBeUndefined();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('respects 15-second cooldown on testInferenceConnection to prevent rapid credit waste', async () => {
+      const originalFetch = globalThis.fetch;
+      let chatCallCount = 0;
+
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('whoami')) {
+          return { ok: true, status: 200, json: async () => ({ name: 'gardener' }) } as Response;
+        }
+        if (url.includes('chat/completions')) {
+          chatCallCount++;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ choices: [{ message: { content: '{"status":"ok"}' } }] }),
+          } as Response;
+        }
+        return { ok: false, status: 500 } as Response;
+      }) as any;
+
+      const { testInferenceConnection, clearAiStatusCache } = await import('../server/services/huggingface');
+      const { config } = await import('../server/config');
+      config.hfToken = 'test_token';
+      clearAiStatusCache();
+
+      try {
+        const first = await testInferenceConnection();
+        expect(first.state).toBe('connected');
+        expect(chatCallCount).toBe(1);
+
+        // Immediate second call should use cooldown cache without firing another chat call
+        const second = await testInferenceConnection();
+        expect(second.state).toBe('connected');
+        expect(chatCallCount).toBe(1); // Still 1, credits saved!
+      } finally {
+        globalThis.fetch = originalFetch;
+        clearAiStatusCache();
+      }
     });
   });
 });

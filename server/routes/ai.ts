@@ -6,6 +6,8 @@ import { aiRateLimiter } from '../middleware/rateLimit';
 import {
   callHuggingFaceChat,
   extractJson,
+  getAiStatus,
+  testInferenceConnection,
 } from '../services/huggingface';
 import {
   buildDoctorSystemPrompt,
@@ -28,12 +30,23 @@ export const aiRouter = Router();
 aiRouter.use(aiRateLimiter);
 
 // ========== GET /api/ai/status ==========
-aiRouter.get('/status', (_req: Request, res: Response) => {
-  const isAvailable = Boolean(config.hfToken && config.hfToken.trim().length > 0);
-  res.json({
-    available: isAvailable,
-    model: config.hfVisionModel,
-  });
+aiRouter.get('/status', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const status = await getAiStatus();
+    res.json(status);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ========== POST /api/ai/status/test ==========
+aiRouter.post('/status/test', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await testInferenceConnection();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // ========== POST /api/ai/diagnose ==========

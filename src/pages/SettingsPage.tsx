@@ -10,11 +10,13 @@ import {
   Cpu,
   AlertTriangle,
   CheckCircle2,
+  Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { useLanguage, useGarden } from '../context/AppContext';
-import { checkAIStatus } from '../services/ai/api';
+import { checkAIStatus, testAIConnection } from '../services/ai/api';
 import { exportAllData, importData, clearAllData, type ExportData } from '../services/storage/db';
-import type { GrowingEnvironment } from '../types';
+import type { GrowingEnvironment, AIStatusInfo } from '../types';
 import type { SupportedLanguage } from '../locales/translations';
 
 export default function SettingsPage() {
@@ -26,7 +28,9 @@ export default function SettingsPage() {
   const [environment, setEnvironment] = useState(profile?.growingEnvironment || '');
   const [experience, setExperience] = useState(profile?.experienceLevel || '');
   const [saved, setSaved] = useState(false);
-  const [aiStatus, setAiStatus] = useState<{ available: boolean; model?: string } | null>(null);
+  const [aiStatus, setAiStatus] = useState<AIStatusInfo | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+  const [cooldown, setCooldown] = useState(false);
 
   useEffect(() => {
     if (profile) {
@@ -38,8 +42,32 @@ export default function SettingsPage() {
   }, [profile]);
 
   useEffect(() => {
-    checkAIStatus().then(setAiStatus).catch(() => setAiStatus({ available: false }));
+    checkAIStatus().then(setAiStatus).catch(() => setAiStatus(null));
   }, []);
+
+  const handleTestConnection = async () => {
+    setIsTesting(true);
+    try {
+      const res = await testAIConnection();
+      setAiStatus(res);
+    } catch {
+      setAiStatus((prev) =>
+        prev
+          ? { ...prev, state: 'error', message: 'Failed to complete test probe.' }
+          : {
+              available: false,
+              state: 'error',
+              model: 'unknown',
+              visionModel: 'unknown',
+              message: 'Failed to contact backend.',
+            }
+      );
+    } finally {
+      setIsTesting(false);
+      setCooldown(true);
+      setTimeout(() => setCooldown(false), 5000);
+    }
+  };
 
   const handleSave = async () => {
     await updateProfile({
@@ -80,7 +108,7 @@ export default function SettingsPage() {
         const result = await importData(data);
         alert(`Imported ${result.imported} items. ${result.errors.length ? `Errors: ${result.errors.join(', ')}` : ''}`);
         window.location.reload();
-      } catch (err) {
+      } catch {
         alert('Failed to import: Invalid backup file');
       }
     };
@@ -212,24 +240,99 @@ export default function SettingsPage() {
           transition={{ delay: 0.1 }}
           className="card-padded"
         >
-          <h2 className="heading-section mb-3 flex items-center gap-2">
-            <Cpu className="w-4 h-4" />
-            {t.settings.aiStatus}
-          </h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="heading-section flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-forest-600" />
+              {t.settings.aiStatus}
+            </h2>
+            <button
+              type="button"
+              onClick={handleTestConnection}
+              disabled={isTesting || cooldown || !aiStatus}
+              className="text-xs font-medium text-forest-700 hover:text-forest-800 disabled:opacity-50 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-sage-100 hover:bg-sage-200 transition-colors cursor-pointer"
+            >
+              {isTesting ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-3 h-3" />
+                  Test Live Inference
+                </>
+              )}
+            </button>
+          </div>
+
           {aiStatus === null ? (
             <p className="text-sm text-sage-500">{t.common.loading}</p>
-          ) : aiStatus.available ? (
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-green-500" />
-              <span className="text-sm text-green-700">{t.settings.aiConnected}</span>
-              {aiStatus.model && (
-                <span className="text-xs text-sage-500 ml-1">({aiStatus.model})</span>
-              )}
-            </div>
           ) : (
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500" />
-              <span className="text-sm text-amber-700">{t.settings.aiNotConfigured}</span>
+            <div className="space-y-2.5">
+              {/* Badge & Status Line */}
+              {aiStatus.state === 'connected' && (
+                <div className="flex items-start gap-2 p-2.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-xs">
+                  <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block">Connected & Verified</span>
+                    <span>{aiStatus.message}</span>
+                  </div>
+                </div>
+              )}
+
+              {aiStatus.state === 'configured' && (
+                <div className="flex items-start gap-2 p-2.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-xs">
+                  <Cpu className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block">
+                      Token Authenticated {aiStatus.accountUsername ? `(@${aiStatus.accountUsername})` : ''}
+                    </span>
+                    <span>{aiStatus.message}</span>
+                  </div>
+                </div>
+              )}
+
+              {aiStatus.state === 'quota_exceeded' && (
+                <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block">Inference Credits Depleted</span>
+                    <span>{aiStatus.message}</span>
+                  </div>
+                </div>
+              )}
+
+              {aiStatus.state === 'unconfigured' && (
+                <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block">Not Configured</span>
+                    <span>{aiStatus.message}</span>
+                  </div>
+                </div>
+              )}
+
+              {aiStatus.state === 'error' && (
+                <div className="flex items-start gap-2 p-2.5 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs">
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block">Configuration / Auth Error</span>
+                    <span>{aiStatus.message}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Models Info */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-xs text-sage-600">
+                <div className="p-2 rounded bg-sage-50 border border-sage-100">
+                  <span className="text-sage-400 block font-medium">Text / Coach Model:</span>
+                  <span className="font-mono text-sage-800">{aiStatus.model}</span>
+                </div>
+                <div className="p-2 rounded bg-sage-50 border border-sage-100">
+                  <span className="text-sage-400 block font-medium">Vision / Doctor Model:</span>
+                  <span className="font-mono text-sage-800">{aiStatus.visionModel}</span>
+                </div>
+              </div>
             </div>
           )}
         </motion.section>

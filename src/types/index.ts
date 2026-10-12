@@ -197,6 +197,18 @@ export const GeneratedMissionSchema = z.object({
 });
 export type GeneratedMission = z.infer<typeof GeneratedMissionSchema>;
 
+export type AIConnectionState = 'unconfigured' | 'configured' | 'connected' | 'quota_exceeded' | 'error';
+
+export interface AIStatusInfo {
+  available: boolean;
+  state: AIConnectionState;
+  model: string;
+  visionModel: string;
+  accountUsername?: string;
+  message: string;
+  lastChecked?: string;
+}
+
 // ========== API Request/Response Types ==========
 
 export interface ChatMessage {

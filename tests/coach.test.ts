@@ -50,6 +50,22 @@ describe('Garden Coach API & Inference Pipeline', () => {
       expect(res.status).toBe(429);
       expect(res.body.error).toContain('rate limit');
     });
+
+    it('handles 402 payment/credit exhaustion with actionable guidance', async () => {
+      vi.spyOn(hfModule, 'callHuggingFaceChat').mockRejectedValueOnce(
+        new hfModule.AiServiceError(
+          402,
+          'Hugging Face billing/quota limit: You have no remaining inference credits on this account.'
+        )
+      );
+
+      const res = await request(app)
+        .post('/api/ai/coach')
+        .send({ message: 'How to propagate mint?', language: 'en' });
+
+      expect(res.status).toBe(402);
+      expect(res.body.error).toContain('remaining inference credits');
+    });
   });
 
   describe('Personalization & Structured Responses', () => {

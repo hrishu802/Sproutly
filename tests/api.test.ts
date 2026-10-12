@@ -17,17 +17,66 @@ describe('Sproutly Express API & Security Middleware', () => {
     expect(res.body.service).toBe('Sproutly AI Backend');
   });
 
-  it('GET /api/ai/status returns AI availability correctly', async () => {
+  it('GET /api/ai/status returns truthful connection states without false positives', async () => {
     config.hfToken = '';
     const resNoToken = await request(app).get('/api/ai/status');
     expect(resNoToken.status).toBe(200);
     expect(resNoToken.body.available).toBe(false);
+    expect(resNoToken.body.state).toBe('unconfigured');
 
+    // Token present but unverified: should report configured, NOT connected!
     config.hfToken = 'hf_mock_token_for_test';
-    const resWithToken = await request(app).get('/api/ai/status');
-    expect(resWithToken.status).toBe(200);
-    expect(resWithToken.body.available).toBe(true);
-    expect(resWithToken.body.model).toBeDefined();
+    // Mock whoami response
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      if (url.includes('whoami')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ name: 'test_gardener' }),
+        } as Response;
+      }
+      return { ok: false, status: 500 } as Response;
+    }) as any;
+
+    try {
+      const resConfigured = await request(app).get('/api/ai/status');
+      expect(resConfigured.status).toBe(200);
+      expect(resConfigured.body.state).toBe('configured');
+      expect(resConfigured.body.available).toBe(false); // Truthful: not claimed as connected yet!
+      expect(resConfigured.body.accountUsername).toBe('test_gardener');
+      expect(resConfigured.body.model).toBeDefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('POST /api/ai/status/test runs on-demand probe and reports state', async () => {
+    config.hfToken = 'hf_mock_token_for_test';
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = (async (url: string) => {
+      if (url.includes('whoami')) {
+        return { ok: true, status: 200, json: async () => ({ name: 'test_gardener' }) } as Response;
+      }
+      if (url.includes('chat/completions')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ choices: [{ message: { content: '{"status":"ok"}' } }] }),
+        } as Response;
+      }
+      return { ok: false, status: 500 } as Response;
+    }) as any;
+
+    try {
+      const res = await request(app).post('/api/ai/status/test');
+      expect(res.status).toBe(200);
+      expect(res.body.state).toBe('connected');
+      expect(res.body.available).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('POST /api/ai/diagnose rejects missing symptoms with 400', async () => {
@@ -106,5 +155,27 @@ describe('Sproutly Express API & Security Middleware', () => {
     const res = await request(app).get('/api/nonexistent');
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('Endpoint not found');
+  });
+
+  it('permits CORS requests from Sproutly Vercel deployment origins', async () => {
+    const resZeta = await request(app)
+      .get('/api/health')
+      .set('Origin', 'https://sproutly-zeta.vercel.app');
+    expect(resZeta.status).toBe(200);
+    expect(resZeta.headers['access-control-allow-origin']).toBe('https://sproutly-zeta.vercel.app');
+
+    const resEta = await request(app)
+      .get('/api/health')
+      .set('Origin', 'https://sproutly-eta.vercel.app');
+    expect(resEta.status).toBe(200);
+    expect(resEta.headers['access-control-allow-origin']).toBe('https://sproutly-eta.vercel.app');
+  });
+
+  it('rejects CORS requests from untrusted origins', async () => {
+    const res = await request(app)
+      .get('/api/health')
+      .set('Origin', 'https://malicious-site.com');
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain('not allowed by CORS policy');
   });
 });
