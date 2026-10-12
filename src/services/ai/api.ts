@@ -8,7 +8,21 @@ import type {
   AIStatusInfo,
 } from '../../types';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+function resolveApiBase(): string {
+  const envUrl = (import.meta.env.VITE_API_BASE_URL || '').trim();
+  if (envUrl) {
+    const clean = envUrl.replace(/\/+$/, '');
+    return clean.endsWith('/api') ? clean : `${clean}/api`;
+  }
+  // In production builds (e.g. Vercel deployment), point to the live Render backend
+  if (import.meta.env.PROD) {
+    return 'https://sproutly-api-9b64.onrender.com/api';
+  }
+  // In local development, Vite proxies '/api' to 'http://localhost:3001'
+  return '/api';
+}
+
+export const API_BASE = resolveApiBase();
 
 class ApiError extends Error {
   status: number;
@@ -102,6 +116,19 @@ export async function identifyPlant(image: File): Promise<any[]> {
   });
   const data = await handleResponse<{ available: boolean; results?: any[] }>(response);
   return data.results || [];
+}
+
+export async function getWeatherData(params: {
+  region?: string;
+  lat?: number;
+  lon?: number;
+}): Promise<{ available: boolean; weather?: any; error?: string }> {
+  const query = new URLSearchParams();
+  if (params.region) query.set('region', params.region);
+  if (params.lat !== undefined && !isNaN(params.lat)) query.set('lat', String(params.lat));
+  if (params.lon !== undefined && !isNaN(params.lon)) query.set('lon', String(params.lon));
+  const response = await fetch(`${API_BASE}/ai/weather?${query.toString()}`);
+  return handleResponse(response);
 }
 
 export { ApiError };

@@ -156,4 +156,26 @@ describe('Sproutly Express API & Security Middleware', () => {
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('Endpoint not found');
   });
+
+  it('permits CORS requests from Sproutly Vercel deployment origins', async () => {
+    const resZeta = await request(app)
+      .get('/api/health')
+      .set('Origin', 'https://sproutly-zeta.vercel.app');
+    expect(resZeta.status).toBe(200);
+    expect(resZeta.headers['access-control-allow-origin']).toBe('https://sproutly-zeta.vercel.app');
+
+    const resEta = await request(app)
+      .get('/api/health')
+      .set('Origin', 'https://sproutly-eta.vercel.app');
+    expect(resEta.status).toBe(200);
+    expect(resEta.headers['access-control-allow-origin']).toBe('https://sproutly-eta.vercel.app');
+  });
+
+  it('rejects CORS requests from untrusted origins', async () => {
+    const res = await request(app)
+      .get('/api/health')
+      .set('Origin', 'https://malicious-site.com');
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain('not allowed by CORS policy');
+  });
 });
