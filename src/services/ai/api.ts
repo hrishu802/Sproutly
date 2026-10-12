@@ -5,6 +5,7 @@ import type {
   DiagnosisRequest,
   MissionGenerateRequest,
   GeneratedMission,
+  AIStatusInfo,
 } from '../../types';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -34,13 +35,26 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 // ========== AI Service ==========
 
-export async function checkAIStatus(): Promise<{ available: boolean; model?: string }> {
+export async function checkAIStatus(): Promise<AIStatusInfo> {
   try {
     const res = await fetch(`${API_BASE}/ai/status`);
-    return handleResponse(res);
+    return handleResponse<AIStatusInfo>(res);
   } catch {
-    return { available: false };
+    return {
+      available: false,
+      state: 'error',
+      model: 'unknown',
+      visionModel: 'unknown',
+      message: 'Failed to contact Sproutly backend server.',
+    };
   }
+}
+
+export async function testAIConnection(): Promise<AIStatusInfo> {
+  const res = await fetch(`${API_BASE}/ai/status/test`, {
+    method: 'POST',
+  });
+  return handleResponse<AIStatusInfo>(res);
 }
 
 export async function diagnosePlant(request: DiagnosisRequest): Promise<DiagnosisResult> {
